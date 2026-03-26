@@ -9,25 +9,22 @@ use synfony::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut app = Application::new()?;
-    app.register_routes(UserController::routes());
+    let app = Application::new()?;
+    // Controllers are auto-discovered — no registration needed!
     app.run().await
 }
 
-struct UserController;
+pub struct UserController;
 
+#[controller("/api/users")]
 impl UserController {
-    fn routes() -> Router<AppState> {
-        Router::new()
-            .route("/api/users", get(Self::list))
-            .route("/api/users/{id}", get(Self::show))
-    }
-
+    #[route(GET, "/", name = "user_list")]
     async fn list(repo: Inject<UserRepository>) -> Result<Json<Vec<User>>, ApiError> {
         let users = repo.find_all().await.map_err(|e| ApiError::internal(e.to_string()))?;
         Ok(Json(users))
     }
 
+    #[route(GET, "/{id}", name = "user_show")]
     async fn show(Path(id): Path<i32>, repo: Inject<UserRepository>) -> Result<Json<User>, ApiError> {
         repo.find_by_id(id)
             .await
@@ -42,7 +39,7 @@ impl UserController {
 
 | What you know from Symfony | What Synfony gives you |
 |---|---|
-| `#[Route('/api/users')]` | Controller routing with `Router::new().route(...)` |
+| `#[Route('/api/users')]` | `#[controller("/api/users")]` + `#[route(GET, "/", name = "user_list")]` |
 | Autowired constructor injection | `Inject<T>` extractor resolves services from the DI container |
 | `security.yaml` firewalls | `FirewallLayer` with pattern matching and authenticators |
 | `#[IsGranted('ROLE_ADMIN')]` | `CurrentUser` extractor + voter system |
@@ -52,6 +49,8 @@ impl UserController {
 | EventDispatcher | `EventDispatcher` with priority-ordered async listeners |
 | Messenger component | `MessageBus` with sync and async (tokio::spawn) dispatch |
 | `bin/console` | `Application::run()` detects CLI commands vs HTTP serving |
+| `$this->generateUrl('route')` | `url_gen.url("route", &[("id", "5")])` via `UrlGenerator` |
+| `DEFAULT_URI` | `DEFAULT_URI=https://example.com` — production-like URLs in dev |
 | `.env` cascading | `.env` → `.env.local` → `.env.{APP_ENV}` → `.env.{APP_ENV}.local` |
 
 **What you gain:** 5-50x performance over PHP, compile-time guarantees (DI graph, types, SQL), true async concurrency, memory safety, single-binary deployment.
@@ -106,19 +105,20 @@ serde = { version = "1", features = ["derive"] }
 ```rust
 use synfony::prelude::*;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut app = Application::new()?;
+pub struct HealthController;
 
-    app.register_routes(
-        Router::new().route("/api/health", axum::routing::get(health))
-    );
-
-    app.run().await
+#[controller("/api")]
+impl HealthController {
+    #[route(GET, "/health", name = "health")]
+    async fn health() -> Json<serde_json::Value> {
+        Json(serde_json::json!({ "status": "ok" }))
+    }
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ok" }))
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let app = Application::new()?;
+    app.run().await // Controllers are auto-discovered!
 }
 ```
 
@@ -207,7 +207,7 @@ The framework is split into 13 focused crates, like Symfony's component architec
 
 ### Application & Kernel
 
-The `Application` is the entry point — equivalent to Symfony's Kernel combined with `bin/console`.
+The `Application` is the entry point — equivalent to Symfony's Kernel combined with `bin/console`. Controllers are auto-discovered via the `#[controller]` macro — no manual route registration needed.
 
 ```rust
 let mut app = Application::new()?;
@@ -215,26 +215,16 @@ let mut app = Application::new()?;
 // Register services in the DI container
 app.register_service(Arc::new(my_service));
 
-// Register controller routes
-app.register_routes(MyController::routes());
+// Configure security (applied globally — pattern matching handles public vs protected)
+app.set_firewall(firewall_layer);
 
-// Run: serves HTTP or executes a CLI command (auto-detected from args)
+// Run: auto-discovers controllers, serves HTTP or executes a CLI command
 app.run().await?;
-```
-
-The `Kernel` builds the Axum router with middleware:
-
-```rust
-let kernel = Kernel::new(config, container)
-    .register_routes(UserController::routes())
-    .register_routes(AdminController::routes())
-    .with_default_middleware()
-    .build(); // → axum::Router ready to serve
 ```
 
 Built-in CLI commands:
 - `serve --port 8000` — Start the HTTP server
-- `debug:router` — List all registered routes
+- `debug:router` — List all auto-discovered named routes with methods, paths, and DEFAULT_URI
 - `debug:container` — List all registered services
 
 ---
@@ -337,41 +327,77 @@ let debug = config.is_debug();        // true in dev
 
 ### Controllers & Routing
 
-Controllers are plain structs with an `impl` block that returns an Axum `Router`:
+Controllers use the `#[controller]` and `#[route]` macros — routes are defined once, right next to the handler, and auto-discovered at startup. No manual registration needed.
 
 ```rust
 pub struct UserController;
 
+#[controller("/api/users")]
 impl UserController {
-    pub fn routes() -> Router<AppState> {
-        Router::new()
-            .route("/api/users", get(Self::list).post(Self::create))
-            .route("/api/users/{id}", get(Self::show).delete(Self::remove))
-    }
-
+    #[route(GET, "/", name = "user_list")]
     async fn list(repo: Inject<UserRepository>) -> Json<Vec<UserDto>> { ... }
+
+    #[route(GET, "/{id}", name = "user_show")]
     async fn show(Path(id): Path<i32>, repo: Inject<UserRepo>) -> Result<Json<UserDto>, ApiError> { ... }
+
+    #[route(POST, "/", name = "user_create")]
     async fn create(repo: Inject<UserRepo>, payload: JsonBody<CreateDto>) -> impl IntoResponse { ... }
+
+    #[route(DELETE, "/{id}", name = "user_delete")]
     async fn remove(Path(id): Path<i32>, repo: Inject<UserRepo>) -> Result<StatusCode, ApiError> { ... }
 }
 
-// Register in main.rs
-app.register_routes(UserController::routes());
+// No registration in main.rs — the #[controller] macro auto-registers via inventory.
+// Just declare the module and the framework discovers it.
 ```
 
 **Symfony comparison:**
 
 ```php
-// Symfony                                    // Synfony
-#[Route('/api/users')]                        // .route("/api/users", get(...))
+// Symfony                                              // Synfony
+#[Route('/api/users')]                                  // #[controller("/api/users")]
 class UserController {
-    #[Route('/', methods: ['GET'])]           // get(Self::list)
-    public function list(): JsonResponse      // async fn list() -> Json<Vec<User>>
+    #[Route('/', name: 'user_list', methods: ['GET'])]  // #[route(GET, "/", name = "user_list")]
+    public function list(): JsonResponse                // async fn list() -> Json<Vec<User>>
 
-    #[Route('/{id}', methods: ['GET'])]       // .route("/api/users/{id}", get(...))
-    public function show(int $id): Response   // async fn show(Path(id): Path<i32>) -> ...
+    #[Route('/{id}', name: 'user_show', methods: ['GET'])]  // #[route(GET, "/{id}", name = "user_show")]
+    public function show(int $id): Response             // async fn show(Path(id): Path<i32>) -> ...
 }
 ```
+
+---
+
+### URL Generation
+
+Named routes + `DEFAULT_URI` — like Symfony's `UrlGeneratorInterface`.
+
+Routes defined with a `name` in `#[route]` are automatically registered in the `RouteRegistry`. The `UrlGenerator` produces URLs from route names + parameters:
+
+```rust
+use synfony::UrlGenerator;
+
+// In any handler (injected automatically):
+async fn create(url_gen: Inject<UrlGenerator>, ...) -> impl IntoResponse {
+    // Relative path
+    let path = url_gen.path("user_show", &[("id", "5")])?;
+    // → "/api/users/5"
+
+    // Absolute URL (uses DEFAULT_URI from .env)
+    let url = url_gen.url("user_show", &[("id", "5")])?;
+    // → "https://example.com/api/users/5"
+
+    // Use as Location header
+    Ok((StatusCode::CREATED, [("Location", url)], Json(user)))
+}
+```
+
+Set `DEFAULT_URI` in your `.env` for production-like URLs in development:
+
+```
+DEFAULT_URI=https://myapp.local
+```
+
+Combined with a local hosts file entry (`127.0.0.1 myapp.local`), all generated URLs match production — links in emails, API responses, and CLI output work identically.
 
 ---
 
@@ -463,9 +489,8 @@ let security_config = SecurityConfig {
 
 let firewall = FirewallLayer::from_config(security_config, authenticators);
 
-// Apply to routes as Tower middleware
-app.register_routes(UserController::routes().layer(firewall.clone()));
-app.register_routes(AdminController::routes().layer(firewall));
+// Apply globally — the firewall's pattern matching handles public vs protected routes
+app.set_firewall(firewall);
 ```
 
 #### CurrentUser Extractor
@@ -904,9 +929,9 @@ Rust has no runtime reflection (unlike PHP's `ReflectionClass`). Our DI containe
 
 The event dispatcher passes owned (cloned) events to listeners. This avoids lifetime complexity with async closures — Rust's borrow checker doesn't allow `&Event` to live across `.await` points. The trade-off is a clone per listener, which is negligible for typical event payloads.
 
-### Why no `#[controller]` macro on the example app?
+### Why auto-discovery via `inventory`?
 
-The `#[controller]` proc macro exists in `synfony-macros` but the example app uses manual `routes()` methods. This is intentional — the macro generates the same code, but explicit routing is easier to debug and understand during early development. The macro will be refined and documented when the API stabilizes.
+Controllers are auto-registered at link time using the [`inventory`](https://docs.rs/inventory) crate. The `#[controller]` macro submits a `ControllerRegistration` entry, and `Application::run()` collects them all. This means adding a controller is just creating a file — no registration boilerplate in `main.rs`. This mirrors Symfony's service autoconfiguration, where controllers in `src/Controller/` are auto-discovered.
 
 ---
 
@@ -918,9 +943,9 @@ The current container uses `HashMap<TypeId, Box<dyn Any>>` — a runtime service
 **Impact:** If you forget to `register_service()`, you get a panic on first request, not a compile error.
 
 ### `#[controller]` macro parses route attributes via string splitting
-The `controller.rs` macro parses `#[route(GET, "/path")]` by splitting on commas and trimming quotes — fragile string manipulation instead of proper syn parsing. This works for simple cases but will break with complex attribute arguments.
+The `controller.rs` macro parses `#[route(GET, "/path", name = "...")]` by splitting on commas and trimming quotes — fragile string manipulation instead of proper syn parsing. This works for the current format but would break with more complex attribute arguments.
 
-**Impact:** Route attributes must follow the exact format `#[route(METHOD, "/path")]`. No support for named routes, middleware annotations, or other Symfony-like attributes yet.
+**Impact:** Route attributes must follow the exact format `#[route(METHOD, "/path")]` or `#[route(METHOD, "/path", name = "route_name")]`.
 
 ### `#[service]` macro generates `from_container()` but nothing auto-registers
 The `#[service]` macro generates a `from_container(&Container) -> Arc<Self>` method, but services still need manual `app.register_service(Arc::new(...))` calls in `main()`. The `inventory`-based auto-discovery is stubbed but not wired up.
@@ -935,7 +960,7 @@ The `#[service]` macro generates a `from_container(&Container) -> Arc<Self>` met
 ### Firewall ordering depends on HashMap iteration order
 Firewalls are stored in a `HashMap<String, FirewallConfig>`, so matching order is non-deterministic. Symfony processes firewalls in declaration order, which matters when patterns overlap.
 
-**Impact:** If you have overlapping patterns (e.g., `/api/login` and `/api/*`), the more specific pattern might not match first. The current workaround is to register public routes without the firewall layer.
+**Impact:** If you have overlapping patterns (e.g., `/api/login` and `/api/*`), the more specific pattern might not match first.
 
 ### No request-scoped services
 All services are singletons (`Arc<T>`). There's no equivalent to Symfony's `service_subscriber` or request-scoped services. Database connections are shared via a connection pool, which works, but per-request state must go through Axum's request extensions.
@@ -953,11 +978,11 @@ The framework has no automated tests. All verification was done via end-to-end c
 ### Near-term (v0.2)
 
 - [ ] **Test suite** — Unit tests for all crates, integration tests for the example app
-- [ ] **Improved `#[controller]` macro** — Proper syn-based parsing, support for route names
+- [x] ~~**Improved `#[controller]` macro**~~ — Route names, auto-discovery via `inventory`, `Controller` trait
 - [ ] **`#[is_granted]` macro** — Route-level authorization attribute
 - [ ] **`synfony new` CLI tool** — Project scaffolding (like `symfony new`)
 - [ ] **`make:controller` / `make:entity`** — Code generators (like MakerBundle)
-- [ ] **`debug:router` with metadata** — Show methods, paths, middleware, controller names
+- [x] ~~**`debug:router` with metadata**~~ — Shows name, method, path table + DEFAULT_URI
 - [ ] **Firewall from `security.yaml`** — Load firewall config from YAML instead of Rust code
 - [ ] **Fix firewall ordering** — Use `Vec` instead of `HashMap` for deterministic matching
 
@@ -1018,9 +1043,10 @@ synfony/
 │
 ├── synfony-core/                 # Application lifecycle
 │   └── src/
-│       ├── application.rs        # Application (entry point + CLI)
+│       ├── application.rs        # Application (entry point + CLI + auto-discovery)
 │       ├── error.rs              # ApiError + ErrorResponse
 │       ├── kernel.rs             # HTTP Kernel (builds Axum router)
+│       ├── routing/              # Controller trait, RouteRegistry, UrlGenerator
 │       └── state.rs              # AppState (shared across handlers)
 │
 ├── synfony-macros/               # Procedural macros
@@ -1088,7 +1114,7 @@ synfony/
         ├── config/app.yaml
         └── src/
             ├── main.rs           # App bootstrap + wiring
-            ├── controller/       # 4 controllers (health, auth, user, admin)
+            ├── controller/       # 5 controllers (health, login, profile, user, admin)
             ├── dto/              # UserDto + CreateUserDto (with validation + groups)
             ├── entity/           # SeaORM User entity
             ├── event/            # UserCreatedEvent, UserDeletedEvent
