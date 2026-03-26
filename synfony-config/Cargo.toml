@@ -8,7 +8,7 @@ description = "Configuration system for Synfony with YAML and .env support"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+
 dotenvy = { workspace = true }
 config = { workspace = true }
 thiserror = { workspace = true }

@@ -946,9 +946,6 @@ The `SerializeGroups` macro serializes each field to a `serde_json::Value` and c
 ### No tests
 The framework has no automated tests. All verification was done via end-to-end curl testing against the example app. Unit tests for the DI container, firewall matching, voter system, and event dispatcher should be added.
 
-### `serde_yaml` is deprecated
-The workspace uses `serde_yaml = "0.9"` which is deprecated. Should migrate to `serde_yml` or another maintained YAML library.
-
 ---
 
 ## Roadmap
@@ -963,7 +960,6 @@ The workspace uses `serde_yaml = "0.9"` which is deprecated. Should migrate to `
 - [ ] **`debug:router` with metadata** — Show methods, paths, middleware, controller names
 - [ ] **Firewall from `security.yaml`** — Load firewall config from YAML instead of Rust code
 - [ ] **Fix firewall ordering** — Use `Vec` instead of `HashMap` for deterministic matching
-- [ ] **Replace `serde_yaml`** — Migrate to `serde_yml` or `toml` configuration
 
 ### Mid-term (v0.3)
 
