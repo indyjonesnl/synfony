@@ -2978,6 +2978,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "inventory",
  "serde",
  "serde_json",
  "synfony-config",
@@ -3032,6 +3033,7 @@ dependencies = [
  "axum",
  "clap",
  "hyper",
+ "inventory",
  "serde",
  "serde_json",
  "synfony-config",

@@ -1,33 +1,39 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::Router;
 use clap::{Parser, Subcommand};
 use synfony_config::SynfonyConfig;
 use synfony_console::ConsoleIO;
 use synfony_di::Container;
+use synfony_security::firewall::FirewallLayer;
 use tokio::net::TcpListener;
 
 use crate::kernel::Kernel;
+use crate::routing::{ControllerRegistration, RouteRegistry, UrlGenerator};
 use crate::state::AppState;
 
 /// The Synfony Application — the main entry point.
 ///
-/// Equivalent to Symfony's Kernel + bin/console combined.
-/// Handles both HTTP serving and CLI command execution.
+/// Controllers are auto-discovered via the `#[controller]` macro — no manual
+/// route registration needed. Just create a controller file, add routes,
+/// and the framework finds it automatically.
 ///
 /// # Example
 /// ```ignore
 /// #[tokio::main]
 /// async fn main() {
-///     let app = Application::new().await.unwrap();
-///     app.register_routes(UserController::routes());
+///     let mut app = Application::new().unwrap();
+///     app.register_service(Arc::new(my_service));
+///     app.set_firewall(firewall_layer);
 ///     app.run().await.unwrap();
+///     // Controllers are auto-discovered — no register_routes() calls needed
 /// }
 /// ```
 pub struct Application {
     config: SynfonyConfig,
     container: Container,
-    routes: Vec<Router<AppState>>,
+    firewall: Option<FirewallLayer>,
 }
 
 #[derive(Parser)]
@@ -62,7 +68,6 @@ enum Commands {
 impl Application {
     /// Create a new application, loading configuration from the current directory.
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        // Initialize tracing
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
@@ -76,7 +81,7 @@ impl Application {
         Ok(Application {
             config,
             container,
-            routes: Vec::new(),
+            firewall: None,
         })
     }
 
@@ -97,11 +102,11 @@ impl Application {
         Ok(Application {
             config,
             container,
-            routes: Vec::new(),
+            firewall: None,
         })
     }
 
-    /// Get a mutable reference to the DI container for registering services.
+    /// Get a reference to the DI container.
     pub fn container(&self) -> &Container {
         &self.container
     }
@@ -112,47 +117,90 @@ impl Application {
     }
 
     /// Register a service in the DI container.
-    pub fn register_service<T: 'static + Send + Sync>(&self, service: std::sync::Arc<T>) {
+    pub fn register_service<T: 'static + Send + Sync>(&self, service: Arc<T>) {
         self.container.set(service);
     }
 
-    /// Register controller routes.
-    pub fn register_routes(&mut self, routes: Router<AppState>) {
-        self.routes.push(routes);
+    /// Set the security firewall layer (applied globally to all routes).
+    ///
+    /// The firewall's pattern matching handles which routes are public vs protected.
+    /// Equivalent to Symfony's security.yaml firewall configuration.
+    pub fn set_firewall(&mut self, firewall: FirewallLayer) {
+        self.firewall = Some(firewall);
     }
 
     /// Run the application — either serve HTTP or execute a CLI command.
+    ///
+    /// Controllers are auto-discovered via `inventory`. Any struct with
+    /// `#[controller]` is automatically registered.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+        // Auto-discover all controllers registered via #[controller] macro
+        let mut registry = RouteRegistry::new();
+        let mut router = Router::new();
+
+        let mut controller_count = 0;
+        for registration in inventory::iter::<ControllerRegistration> {
+            let routes = (registration.routes_fn)();
+            let metadata = (registration.metadata_fn)();
+
+            router = router.merge(routes);
+            for def in metadata {
+                registry.add(def);
+            }
+            controller_count += 1;
+        }
+
+        tracing::debug!(
+            controllers = controller_count,
+            routes = registry.len(),
+            "Auto-discovered controllers"
+        );
+
+        // Apply firewall globally if configured
+        if let Some(firewall) = &self.firewall {
+            router = router.layer(firewall.clone());
+        }
+
+        // Freeze registry and create UrlGenerator
+        let registry = Arc::new(registry);
+        let base_url = std::env::var("DEFAULT_URI").ok();
+        let url_generator = Arc::new(UrlGenerator::new(registry.clone(), base_url));
+        self.container.set(registry.clone());
+        self.container.set(url_generator);
+
         let cli = Cli::parse();
 
         match cli.command {
             Some(Commands::Serve { host, port }) => {
-                self.serve(&host, port).await
+                self.serve(router, &host, port).await
             }
             Some(Commands::DebugRouter) => {
-                self.debug_router();
+                Self::debug_router(&registry, &self.container);
                 Ok(())
             }
             Some(Commands::DebugContainer) => {
-                self.debug_container();
+                Self::debug_container();
                 Ok(())
             }
             None => {
-                // Default: serve on port 8000
-                self.serve("0.0.0.0", 8000).await
+                self.serve(router, "0.0.0.0", 8000).await
             }
         }
     }
 
-    async fn serve(self, host: &str, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    async fn serve(
+        self,
+        router: Router<AppState>,
+        host: &str,
+        port: u16,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let io = ConsoleIO::new();
 
-        let mut kernel = Kernel::new(self.config, self.container);
-        for routes in self.routes {
-            kernel = kernel.register_routes(routes);
-        }
+        let kernel = Kernel::new(self.config, self.container)
+            .with_router(router)
+            .with_default_middleware();
 
-        let app = kernel.with_default_middleware().build();
+        let app = kernel.build();
 
         let addr: SocketAddr = format!("{host}:{port}").parse()?;
         let listener = TcpListener::bind(addr).await?;
@@ -167,14 +215,33 @@ impl Application {
         Ok(())
     }
 
-    fn debug_router(&self) {
+    fn debug_router(registry: &RouteRegistry, container: &Container) {
         let io = ConsoleIO::new();
         io.title("Registered Routes");
-        io.comment("Route debugging will be enhanced with route metadata collection.");
-        io.info("Use #[controller] and #[route] macros to register routes.");
+
+        let routes = registry.all();
+
+        if routes.is_empty() {
+            io.comment("No named routes registered.");
+            io.info("Use #[controller] and #[route] macros to define routes.");
+            return;
+        }
+
+        let rows: Vec<Vec<&str>> = routes
+            .iter()
+            .map(|r| vec![r.name.as_str(), r.method.as_str(), r.path.as_str()])
+            .collect();
+
+        io.table(vec!["Name", "Method", "Path"], rows);
+
+        let url_gen = container.resolve::<UrlGenerator>();
+        if let Some(base) = url_gen.base_url() {
+            io.newline();
+            io.info(&format!("DEFAULT_URI: {}", base));
+        }
     }
 
-    fn debug_container(&self) {
+    fn debug_container() {
         let io = ConsoleIO::new();
         io.title("Registered Services");
         io.comment("Container debugging will be enhanced with service metadata collection.");

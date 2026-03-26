@@ -1,17 +1,14 @@
 //! # Hello API — Synfony Example Application
 //!
-//! A complete API demonstrating all Synfony framework features:
-//! - JWT authentication with firewalls and role-based access control
-//! - SQLite ORM with repository pattern
-//! - Auto-validating request payloads (422 on invalid data)
-//! - Serialization groups (different views per endpoint/role)
-//! - Event dispatcher (domain events with sync listeners)
-//! - Message bus (async background jobs via tokio::spawn)
+//! A complete API demonstrating all Synfony framework features.
+//! Controllers are auto-discovered — no manual route registration needed.
 //!
 //! ## Demo Credentials
 //! - Admin: admin@example.com / admin
 //! - User:  user@example.com / user
 
+// Controllers are auto-discovered by the #[controller] macro.
+// Just declaring the modules is enough — no registration calls needed.
 mod controller;
 mod dto;
 mod entity;
@@ -34,10 +31,6 @@ use synfony_security::firewall::{
 };
 use synfony_security::jwt::{JwtAuthenticator, JwtConfig, JwtManager};
 
-use controller::admin_controller::AdminController;
-use controller::auth_controller::AuthController;
-use controller::health_controller::HealthController;
-use controller::user_controller::UserController;
 use event::{UserCreatedEvent, UserDeletedEvent};
 use message::{NotifyAdminsOfNewUser, SendWelcomeEmail};
 use repository::UserRepository;
@@ -87,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("Seeded 3 demo users");
     }
 
-    // --- Security ---
+    // --- Security (equivalent to security.yaml) ---
     let jwt_secret =
         std::env::var("JWT_SECRET").unwrap_or_else(|_| "default-dev-secret".to_string());
     let jwt_config = JwtConfig::new(&jwt_secret).with_ttl(3600);
@@ -141,65 +134,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             jwt_authenticator as synfony_security::AuthenticatorBox,
         )]);
 
-    let firewall_layer = FirewallLayer::from_config(security_config, authenticators);
+    app.set_firewall(FirewallLayer::from_config(security_config, authenticators));
 
-    // --- Event Dispatcher (Symfony EventDispatcher equivalent) ---
-    //
-    // Register event subscribers — like services tagged with kernel.event_subscriber
+    // --- Event Dispatcher ---
     let dispatcher = EventDispatcher::new();
 
-    // Subscriber 1: Log user creation (priority 20 = fires first)
     dispatcher.listen::<UserCreatedEvent>(20, |event: UserCreatedEvent| async move {
-        tracing::info!(
-            user_id = event.user_id,
-            email = %event.email,
-            "EVENT [UserCreatedEvent] New user registered"
-        );
+        tracing::info!(user_id = event.user_id, email = %event.email, "EVENT [UserCreatedEvent] New user registered");
     });
 
-    // Subscriber 2: Audit trail (priority 10 = fires second)
     dispatcher.listen::<UserCreatedEvent>(10, |event: UserCreatedEvent| async move {
-        tracing::info!(
-            user_id = event.user_id,
-            "EVENT [UserCreatedEvent] Audit: user creation recorded"
-        );
+        tracing::info!(user_id = event.user_id, "EVENT [UserCreatedEvent] Audit: user creation recorded");
     });
 
-    // Subscriber for user deletion
     dispatcher.listen::<UserDeletedEvent>(10, |event: UserDeletedEvent| async move {
-        tracing::info!(
-            user_id = event.user_id,
-            "EVENT [UserDeletedEvent] User removed from system"
-        );
+        tracing::info!(user_id = event.user_id, "EVENT [UserDeletedEvent] User removed from system");
     });
 
     app.register_service(Arc::new(dispatcher));
 
-    // --- Message Bus (Symfony Messenger equivalent) ---
-    //
-    // Register message handlers — like classes with #[AsMessageHandler]
+    // --- Message Bus ---
     let bus = MessageBus::new();
 
-    // Handler: SendWelcomeEmail (runs in background via tokio::spawn)
     bus.register_handler::<SendWelcomeEmail>(|msg: SendWelcomeEmail| async move {
-        // Simulate sending email (in production, use a real mailer)
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        tracing::info!(
-            user_id = msg.user_id,
-            email = %msg.email,
-            "MESSENGER [SendWelcomeEmail] Welcome email sent"
-        );
+        tracing::info!(user_id = msg.user_id, email = %msg.email, "MESSENGER [SendWelcomeEmail] Welcome email sent");
         Ok(())
     });
 
-    // Handler: NotifyAdminsOfNewUser
     bus.register_handler::<NotifyAdminsOfNewUser>(|msg: NotifyAdminsOfNewUser| async move {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        tracing::info!(
-            user_id = msg.user_id,
-            user_name = %msg.user_name,
-            "MESSENGER [NotifyAdminsOfNewUser] Admin notification sent"
-        );
+        tracing::info!(user_id = msg.user_id, user_name = %msg.user_name, "MESSENGER [NotifyAdminsOfNewUser] Admin notification sent");
         Ok(())
     });
 
@@ -210,19 +175,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     app.register_service(user_repo);
     app.register_service(db);
 
-    // --- Routes ---
-    app.register_routes(HealthController::routes());
-    app.register_routes(AuthController::public_routes());
-
-    app.register_routes(
-        AuthController::protected_routes()
-            .layer(firewall_layer.clone()),
-    );
-    app.register_routes(
-        UserController::routes().layer(firewall_layer.clone()),
-    );
-    app.register_routes(AdminController::routes().layer(firewall_layer));
-
+    // --- Run ---
+    // Controllers are auto-discovered from #[controller] macros.
+    // No register_routes() calls needed!
     app.run().await?;
     Ok(())
 }

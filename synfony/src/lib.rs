@@ -20,7 +20,10 @@ pub use synfony_event as event;
 pub use synfony_messenger as messenger;
 
 // Re-export key types at the top level for ergonomics
-pub use synfony_core::{ApiError, Application, AppState, ErrorResponse, Kernel};
+pub use synfony_core::{ApiError, Application, AppState, Controller, ControllerRegistration, ErrorResponse, Kernel, RouteDefinition, RouteRegistry, RoutingError, UrlGenerator};
+
+// Re-export inventory so the #[controller] macro can use it
+pub use inventory;
 pub use synfony_di::{Container, Inject};
 pub use synfony_config::SynfonyConfig;
 pub use synfony_console::ConsoleIO;
@@ -56,7 +59,7 @@ pub mod prelude {
     pub use crate::{controller, route, service};
     pub use crate::{AuthError, CurrentUser, SecurityToken, Vote, Voter};
     pub use crate::{DatabaseConnection, EntityManager, EventDispatcher, MessageBus, OrmError, Repository};
-    pub use crate::{GroupedJson, JsonBody, QueryParams, SerializeGroups, ValidationError};
+    pub use crate::{GroupedJson, JsonBody, QueryParams, RouteDefinition, SerializeGroups, UrlGenerator, ValidationError};
 
     // Common axum types used in handlers
     pub use axum::extract::{Json, Path, Query, State};

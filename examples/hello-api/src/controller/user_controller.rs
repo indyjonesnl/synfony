@@ -1,11 +1,9 @@
 use synfony::axum::extract::Path;
 use synfony::axum::http::StatusCode;
 use synfony::axum::response::IntoResponse;
-use synfony::axum::routing::get;
-use synfony::axum::Router;
 use synfony::di::Inject;
+use synfony::prelude::*;
 use synfony::security::CurrentUser;
-use synfony::{ApiError, AppState};
 use synfony_event::EventDispatcher;
 use synfony_messenger::MessageBus;
 use synfony_orm::Repository;
@@ -17,25 +15,11 @@ use crate::event::{UserCreatedEvent, UserDeletedEvent};
 use crate::message::{NotifyAdminsOfNewUser, SendWelcomeEmail};
 use crate::repository::UserRepository;
 
-/// User API controller.
-///
-/// Demonstrates all Synfony features:
-/// - `Inject<T>` for DI (repository, event dispatcher, message bus)
-/// - `JsonBody<T>` for auto-validating request payloads
-/// - `GroupedJson` for serialization groups
-/// - `CurrentUser` for authenticated user context
-/// - `EventDispatcher` for dispatching domain events
-/// - `MessageBus` for async background jobs
 pub struct UserController;
 
+#[controller("/api/users")]
 impl UserController {
-    pub fn routes() -> Router<AppState> {
-        Router::new()
-            .route("/api/users", get(Self::list).post(Self::create))
-            .route("/api/users/{id}", get(Self::show).delete(Self::remove))
-    }
-
-    /// GET /api/users — List all users (serialization group: "list")
+    #[route(GET, "/", name = "user_list")]
     async fn list(
         repo: Inject<UserRepository>,
     ) -> Result<GroupedJson, ApiError> {
@@ -48,7 +32,7 @@ impl UserController {
         Ok(GroupedJson::array(values))
     }
 
-    /// GET /api/users/:id — Show a single user
+    #[route(GET, "/{id}", name = "user_show")]
     async fn show(
         Path(id): Path<i32>,
         user: CurrentUser,
@@ -65,14 +49,10 @@ impl UserController {
         Ok(GroupedJson::value(dto.serialize_group(group).unwrap()))
     }
 
-    /// POST /api/users — Create a new user
-    ///
-    /// After creation:
-    /// 1. Dispatches `UserCreatedEvent` (sync event listeners fire immediately)
-    /// 2. Dispatches `SendWelcomeEmail` message (async, via tokio::spawn)
-    /// 3. Dispatches `NotifyAdminsOfNewUser` message (async)
+    #[route(POST, "/", name = "user_create")]
     async fn create(
         repo: Inject<UserRepository>,
+        url_gen: Inject<UrlGenerator>,
         dispatcher: Inject<EventDispatcher>,
         bus: Inject<MessageBus>,
         payload: JsonBody<CreateUserDto>,
@@ -88,7 +68,10 @@ impl UserController {
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        // Dispatch domain event (sync — listeners fire before response)
+        let location = url_gen
+            .url("user_show", &[("id", &user.id.to_string())])
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+
         dispatcher
             .dispatch(UserCreatedEvent {
                 user_id: user.id,
@@ -96,7 +79,6 @@ impl UserController {
             })
             .await;
 
-        // Dispatch async messages (fire-and-forget background tasks)
         bus.dispatch_async(SendWelcomeEmail {
             user_id: user.id,
             email: user.email.clone(),
@@ -107,10 +89,14 @@ impl UserController {
         });
 
         let response = UserDto::from_model(&user);
-        Ok((StatusCode::CREATED, GroupedJson::value(response.serialize_group("detail").unwrap())))
+        Ok((
+            StatusCode::CREATED,
+            [("Location", location)],
+            GroupedJson::value(response.serialize_group("detail").unwrap()),
+        ))
     }
 
-    /// DELETE /api/users/:id — Delete a user
+    #[route(DELETE, "/{id}", name = "user_delete")]
     async fn remove(
         Path(id): Path<i32>,
         repo: Inject<UserRepository>,
