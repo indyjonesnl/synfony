@@ -1,0 +1,13 @@
+[package]
+name = "synfony-validation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Validation component for Synfony — auto-validating extractors like Symfony's #[MapRequestPayload]"
+
+[dependencies]
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+validator = { workspace = true }
+thiserror = { workspace = true }

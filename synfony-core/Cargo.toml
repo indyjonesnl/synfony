@@ -1,0 +1,26 @@
+[package]
+name = "synfony-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core application kernel and lifecycle for Synfony"
+
+[dependencies]
+synfony-macros = { workspace = true }
+synfony-di = { workspace = true }
+synfony-config = { workspace = true }
+synfony-console = { workspace = true }
+synfony-security = { workspace = true }
+axum = { workspace = true }
+hyper = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+clap = { workspace = true }

@@ -1,0 +1,14 @@
+[package]
+name = "synfony-console"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI console component for Synfony (Symfony Console equivalent)"
+
+[dependencies]
+clap = { workspace = true }
+dialoguer = { workspace = true }
+indicatif = { workspace = true }
+comfy-table = { workspace = true }
+console = { workspace = true }
+thiserror = { workspace = true }

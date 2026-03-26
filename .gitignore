@@ -1,0 +1,8 @@
+/target
+.env.local
+.env.*.local
+*.swp
+*.swo
+.idea/
+.vscode/
+*.db

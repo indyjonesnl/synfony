@@ -1,0 +1,16 @@
+[package]
+name = "synfony-orm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Doctrine-inspired ORM integration for Synfony (backed by SeaORM)"
+
+[dependencies]
+sea-orm = { workspace = true }
+sea-orm-migration = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }

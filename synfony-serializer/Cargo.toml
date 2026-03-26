@@ -1,0 +1,12 @@
+[package]
+name = "synfony-serializer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Serialization groups for Synfony — Symfony-style #[Groups] for serde"
+
+[dependencies]
+synfony-serializer-macros = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

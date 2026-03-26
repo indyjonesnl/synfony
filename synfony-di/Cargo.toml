@@ -1,0 +1,13 @@
+[package]
+name = "synfony-di"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Compile-time dependency injection container for Synfony"
+
+[dependencies]
+synfony-macros = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+inventory = { workspace = true }
